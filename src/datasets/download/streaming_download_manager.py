@@ -509,7 +509,21 @@ def xopen(file: str, mode="r", *args, download_config: Optional[DownloadConfig] 
     file, storage_options = _prepare_path_and_storage_options(file_str, download_config=download_config)
     kwargs = {**kwargs, **(storage_options or {})}
     try:
-        file_obj = fsspec.open(file, mode=mode, *args, **kwargs).open()
+        success = False
+        for retry in range(1, max_retries + 1):
+            try:
+                file_obj = fsspec.open(file, mode=mode, *args, **kwargs).open()
+                success = True
+            except (ValueError, FileNotFoundError) as err:
+                raise err
+            except Exception as err:
+                disconnect_err = err
+                logger.warning(
+                    f"Got disconnected from remote data host. Retrying in {config.STREAMING_READ_RETRY_INTERVAL}sec [{retry}/{max_retries}]"
+                )
+                time.sleep(config.STREAMING_READ_RETRY_INTERVAL)
+        if not success:
+            raise ConnectionError("Server Disconnected") from disconnect_err
     except ValueError as e:
         if str(e) == "Cannot seek streaming HTTP file":
             raise NonStreamableDatasetError(
